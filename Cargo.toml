@@ -1,0 +1,15 @@
+[package]
+name = "vibrator-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rsbinder = { version = "0.10", default-features = false, features = ["android_10"] }
+
+[build-dependencies]
+rsbinder-aidl = "0.10"
+miette = "7"
+
+[profile.release]
+opt-level = 2
+panic = "abort"
