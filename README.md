@@ -224,7 +224,9 @@ changes in `src/motor.rs`.
 The AIDL interfaces are VINTF-stable. The OPlus extension is vendor-specific and
 does not replace the framework's normal `IVibrator/default` service.
 
-## AIDL licensing
+## License
+
+The project is licensed under the Apache License 2.0. See `LICENSE`.
 
 The Android vibrator AIDL definitions retain their original AOSP Apache-2.0
 copyright headers.
