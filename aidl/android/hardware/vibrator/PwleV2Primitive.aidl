@@ -18,28 +18,10 @@ package android.hardware.vibrator;
 
 @VintfStability
 parcelable PwleV2Primitive {
-    /**
-     * Input amplitude ranges from 0.0 (inclusive) to 1.0 (inclusive), representing the relative
-     * input value. Actual output acceleration depends on frequency and device response curve
-     * (see IVibrator.getFrequencyToOutputAccelerationMap for max values).
-     *
-     * Input amplitude linearly maps to output acceleration (e.g., 0.5 amplitude yields half the
-     * max acceleration for that frequency).
-     *
-     * 0.0 represents no output acceleration amplitude
-     * 1.0 represents the maximum achievable strength for each frequency, as determined by the
-     *     actuator response curve
-     */
+
     float amplitude;
 
-    /**
-     * Absolute frequency point in the units of hertz
-     *
-     * Values are within the continuous inclusive frequency range defined by
-     * IVibrator#getFrequencyToOutputAccelerationMap.
-     */
     float frequencyHz;
 
-    /* Total time from the previous PWLE point to the current one in units of milliseconds. */
     int timeMillis;
 }

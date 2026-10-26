@@ -20,12 +20,6 @@ import android.hardware.vibrator.PwleV2Primitive;
 
 @VintfStability
 parcelable CompositePwleV2 {
-    /**
-     * Represents a PWLE (Piecewise-Linear Envelope) effect as an array of primitives.
-     *
-     * A PWLE effect defines a vibration waveform using amplitude and frequency points.
-     * The envelope linearly interpolates both amplitude and frequency between consecutive points,
-     * creating smooth transitions in the vibration pattern.
-     */
+
     PwleV2Primitive[] pwlePrimitives;
 }

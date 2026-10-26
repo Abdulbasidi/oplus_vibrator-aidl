@@ -25,7 +25,7 @@ fn main() {
         .unwrap_or_else(|e| eprintln!("failed to set oplus extension: {:?}", e));
 
     let instance = std::env::var("VIBRATOR_SERVICE_NAME").unwrap_or_else(|_| {
-        "android.hardware.vibrator.IVibrator/vibratorfeature".to_string()
+        "android.hardware.vibrator.IVibrator/default".to_string()
     });
 
     let host = Host::new().unwrap_or_else(|e| {
@@ -39,10 +39,12 @@ fn main() {
             std::process::exit(1);
         });
 
-    host.add_service("android.hardware.vibrator.IVibrator/default", binder.as_binder())
-        .unwrap_or_else(|e| {
-            eprintln!("warn: failed to add /default: {:?}", e);
-        });
+    if instance != "android.hardware.vibrator.IVibrator/default" {
+        host.add_service("android.hardware.vibrator.IVibrator/default", binder.as_binder())
+            .unwrap_or_else(|e| {
+                eprintln!("warn: failed to add /default: {:?}", e);
+            });
+    }
 
 
     let oplus2 = oplus::OplusVibrator::new(inner);

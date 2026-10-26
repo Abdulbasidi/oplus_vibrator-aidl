@@ -18,20 +18,10 @@ package android.hardware.vibrator;
 
 import android.hardware.vibrator.Braking;
 
-/**
- * BrakingPwle is defined as a segment of zero output acceleration amplitude of duration length.
- *
- * There should be no output acceleration and the vibrator should be off for the entire duration.
- * If the hardware supports braking mechanism(s), they can be set here.
- */
 @VintfStability
 parcelable BrakingPwle {
-    /**
-     * Braking mechanism applied to adjacent segments
-     */
+
     Braking braking;
-    /**
-     * Total duration of zero output acceleration in the units of milliseconds.
-     */
+
     int duration;
 }

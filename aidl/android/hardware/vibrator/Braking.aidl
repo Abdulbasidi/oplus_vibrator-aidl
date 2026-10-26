@@ -19,16 +19,8 @@ package android.hardware.vibrator;
 @VintfStability
 @Backing(type="int")
 enum Braking {
-    /**
-     * No braking mechanism used.
-     * This is the default if the hardware does not support any braking mechanism.
-     */
+
     NONE = 0,
-    /**
-     * Closed-loop active braking.
-     *
-     * This effect should produce a sharp, crisp end to the waveform
-     * Support is optional.
-     */
+
     CLAB = 1,
 }

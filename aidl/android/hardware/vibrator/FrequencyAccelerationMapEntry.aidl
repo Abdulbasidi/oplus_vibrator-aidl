@@ -18,18 +18,8 @@ package android.hardware.vibrator;
 
 @VintfStability
 parcelable FrequencyAccelerationMapEntry {
-    /**
-     * Absolute frequency point in the units of hertz
-     *
-     */
+
     float frequencyHz;
 
-    /**
-     * Max output acceleration for the specified frequency in units of Gs.
-     *
-     * This value represents the maximum safe output acceleration (in Gs) achievable at the
-     * specified frequency, typically determined during calibration. The actual output acceleration
-     * should scale linearly based on the 'amplitude' input value.
-     */
     float maxOutputAccelerationGs;
 }

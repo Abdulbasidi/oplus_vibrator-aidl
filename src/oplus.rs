@@ -16,7 +16,9 @@ impl OplusVibrator {
 
     fn strength_to_amplitude(strength: i32) -> f32 {
         let s = (strength as f32).clamp(0.0, 2400.0);
-        s / 1200.0
+        let t = (s / 1200.0).clamp(0.0, 2.0);
+        let t = t.powf(0.8);
+        t.clamp(0.0, 2.0)
     }
 }
 
