@@ -7,7 +7,7 @@ log() { echo "[$TAG] $*"; }
 err() { echo "[$TAG] ERROR: $*" >&2; exit 1; }
 
 find_haptic() {
-    for dev in /sys/bus/i2c/devices/2-00*/; do
+    for dev in /sys/bus/i2c/devices/[0-9]*-00*/; do
         [ -f "$dev/name" ] || continue
         name=$(cat "$dev/name" 2>/dev/null)
         if echo "$name" | grep -qi "awinic_haptic"; then
@@ -22,7 +22,7 @@ HAPTIC_PATH="${HAPTIC_PATH:-$(find_haptic 2>/dev/null)}"
 
 resolve_path() {
     if [ -z "$HAPTIC_PATH" ]; then
-        HAPTIC_PATH=$(find_haptic 2>/dev/null) || err "awinic_haptic not found on I2C bus"
+        HAPTIC_PATH=$(find_haptic 2>/dev/null) || err "awinic_haptic not found on any I2C bus"
     fi
 }
 
@@ -43,7 +43,7 @@ r() {
 
 cmd_scan() {
     log "Scanning I2C bus for awinic_haptic..."
-    for dev in /sys/bus/i2c/devices/2-00*/; do
+    for dev in /sys/bus/i2c/devices/[0-9]*-00*/; do
         [ -f "$dev/name" ] || continue
         name=$(cat "$dev/name" 2>/dev/null)
         log "  $dev -> name=$name"
