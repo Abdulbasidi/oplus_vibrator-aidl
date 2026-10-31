@@ -1,0 +1,28 @@
+name: build
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: |
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
+          cargo build --release --locked --target aarch64-linux-android
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vibrator-service
+          path: |
+            target/aarch64-linux-android/release/vibrator-service
+            target/aarch64-linux-android/release/ffprobe
