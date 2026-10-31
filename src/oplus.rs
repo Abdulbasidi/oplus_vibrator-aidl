@@ -5,6 +5,13 @@ use crate::gen_oplus::vendor::aac::hardware::richtap::vibrator::IRichtapCallback
 use crate::service::Inner;
 use crate::{alogd, alogi};
 
+// Safe starting point: report no RichTap / linear-motor features so the framework
+// uses the plain IVibrator path. Switch individual keys to 1 (via
+// HOSHIVK_OPLUS_FEATURES) to test the ColorOS linear-motor paths.
+const DEFAULT_FEATURES: &str = "oplus.software.vibrator_richctap=0\n\
+oplus.software.vibrator_lmvibrator=0\n\
+oplus.software.vibrator_qcom_lmvibrator=0\n";
+
 pub struct OplusVibrator {
     inner: Arc<Mutex<Inner>>,
 }
@@ -114,6 +121,20 @@ impl IOplusVibrator for OplusVibrator {
         Ok(0)
     }
 
+    // Added to match the ROM framework's IOplusVibrator V2 (transactions 10 and 11).
+    // Envelope / RTP waveforms are not supported by this motor backend: accept and ack.
+    fn r#performEnvelope(&self, env_info: &[i32], _fast_flag: bool, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
+        alogd!("oplus performEnvelope len={} (unsupported, ignored)", env_info.len());
+        if let Some(cb) = cb { let _ = cb.onCallback(0); }
+        Ok(())
+    }
+
+    fn r#performRtp(&self, _fd: &rsbinder::ParcelFileDescriptor, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
+        alogd!("oplus performRtp (unsupported, ignored)");
+        if let Some(cb) = cb { let _ = cb.onCallback(0); }
+        Ok(())
+    }
+
     fn r#performHe(&self, a: i32, b: i32, c: i32, d: i32, e: &[i32], cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
         let pattern: Vec<i32> = e.iter().take(24).copied().collect();
         alogd!("oplus performHe(looper={} interval={} amp={} freq={} pattern_len={} pattern={:?})",
@@ -161,8 +182,22 @@ impl IOplusVibrator for OplusVibrator {
         Ok(())
     }
 
+    // The ROM framework reads this as UTF-8 text in java.util.Properties format
+    // ("key=value" per line) and parses the values with Integer.parseInt
+    // (missing key => -1). Keys it asks for: see DEFAULT_FEATURES.
+    // Override without rebuilding: HOSHIVK_OPLUS_FEATURES="key=1,key2=0" (set via init `setenv`).
     fn r#getSupportFeatures(&self) -> BinderResult<Vec<u8>> {
-        Ok(vec![0x03])
+        let text = match std::env::var("HOSHIVK_OPLUS_FEATURES") {
+            Ok(s) if !s.trim().is_empty() => s
+                .split(',')
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => DEFAULT_FEATURES.to_string(),
+        };
+        alogd!("oplus getSupportFeatures -> {:?}", text);
+        Ok(text.into_bytes())
     }
 
     fn r#writeGunType(&self, _type: i32) -> BinderResult<()> {
@@ -177,7 +212,7 @@ impl IOplusVibrator for OplusVibrator {
         Ok(())
     }
 
-    fn r#writeHapticAudio(&self, _data: &[i32]) -> BinderResult<()> {
+    fn r#writeHapticAudio(&self, _data: &str) -> BinderResult<()> {
         alogd!("oplus writeHapticAudio len={}", _data.len());
         Ok(())
     }

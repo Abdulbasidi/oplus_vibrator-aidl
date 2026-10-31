@@ -19,7 +19,7 @@ fn main() {
         gen::android::hardware::vibrator::IVibrator::BnVibrator::new_binder(service);
 
 
-    let oplus = oplus::OplusVibrator::new(inner.clone());
+    let oplus = oplus::OplusVibrator::new(inner);
     let oplus_binder = gen_oplus::vendor::oplus::hardware::oplusvibrator::IOplusVibrator::BnOplusVibrator::new_binder(oplus);
     binder.as_binder().set_extension(&oplus_binder.as_binder())
         .unwrap_or_else(|e| eprintln!("failed to set oplus extension: {:?}", e));
@@ -46,20 +46,10 @@ fn main() {
             });
     }
 
-
-    let oplus2 = oplus::OplusVibrator::new(inner);
-    let oplus_binder2 = gen_oplus::vendor::oplus::hardware::oplusvibrator::IOplusVibrator::BnOplusVibrator::new_binder(oplus2);
-    for name in &[
-        "vendor.oplus.hardware.oplusvibrator.IOplusVibrator/default",
-        "oplus.hardware.vibrator_oplus_v1",
-    ] {
-        host.add_service(name, oplus_binder2.as_binder())
-            .unwrap_or_else(|e| {
-                eprintln!("warn: failed to add oplus service {}: {:?}", name, e);
-            });
-    }
-
-    eprintln!("vibrator registered: {} + extension + oplus standalone", instance);
+    // The ROM framework reaches IOplusVibrator only through IVibrator/default's
+    // getExtension() (see OplusVibratorManager.getOplusVibrator), so no standalone
+    // registration of the oplus interface is done.
+    eprintln!("vibrator registered: {} + oplus extension", instance);
 
     host.serve().expect("serve");
 }
