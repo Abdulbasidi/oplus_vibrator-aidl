@@ -9,24 +9,26 @@ pub struct OplusVibrator {
     inner: Arc<Mutex<Inner>>,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum OplusEffect {
-    Ram(u16),
-    Cont(u16),
-}
-
 /// COS17 sends waveform ids from its own bank. Translate the ids we actually
 /// observe into the stock awinic RAM bank, matching the intended duration.
-fn oplus_effect(waveform_id: i32) -> OplusEffect {
+/// Returns the stock effect id.
+fn oplus_effect(waveform_id: i32) -> u16 {
     match waveform_id {
-        1 => OplusEffect::Ram(3),   // short tick (~35 ms)
-        2 => OplusEffect::Ram(0),   // click (~45 ms)
-        7 => OplusEffect::Ram(3),   // touch tick (~30 ms)
-        111 => OplusEffect::Ram(3), // IME key press (~36 ms)
-        310 => OplusEffect::Ram(4), // virtual key (~80 ms)
-        315 => OplusEffect::Cont(150), // volume tick (~155 ms)
-        id if (0..=10).contains(&id) => OplusEffect::Ram(id as u16),
-        _ => OplusEffect::Ram(3),
+        1 => 3,   // short tick (~35 ms)
+        2 => 0,   // click (~45 ms)
+        // 3 is the 110 ms "heavy" pulse used by the power menu / feedback.
+        // The old fallback played the 32 ms eid3 and sounded like a rattle.
+        3 => 4,
+        7 => 3,   // touch tick (~30 ms)
+        105 => 1, // 66 ms segment in composed effects
+        107 => 4, // 146 ms prebaked pulse
+        111 => 3, // IME key press (~36 ms)
+        310 => 4, // virtual key (~80 ms)
+        // 315 is used by both the volume tick and the power button. It must be
+        // a shaped waveform: a 150 ms constant drive feels like a harsh buzz.
+        315 => 4,
+        id if (0..=10).contains(&id) => id as u16,
+        _ => 3,
     }
 }
 
@@ -60,25 +62,18 @@ impl IOplusVibrator for OplusVibrator {
 
     fn r#linearMotorVibratorOn(&self, waveform_id: i32, strength: i32, is_rtp: bool) -> BinderResult<()> {
         let amp = Self::strength_to_amplitude(strength);
-        let effect = oplus_effect(waveform_id);
+        let eid = oplus_effect(waveform_id);
         alogi!(
-            "linearMotorVibratorOn waveformId={} strength={} rtp={} amp={:.2} -> {:?}",
+            "linearMotorVibratorOn waveformId={} strength={} rtp={} amp={:.2} -> eid={}",
             waveform_id,
             strength,
             is_rtp,
             amp,
-            effect
+            eid
         );
         if let Ok(mut inner) = self.inner.lock() {
             inner.amplitude = amp;
-            match effect {
-                OplusEffect::Ram(eid) => {
-                    inner.play_ram(eid, amp);
-                }
-                OplusEffect::Cont(ms) => {
-                    inner.play_cont(ms, amp);
-                }
-            }
+            inner.play_ram(eid, amp);
         }
         Ok(())
     }
