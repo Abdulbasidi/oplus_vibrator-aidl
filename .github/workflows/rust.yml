@@ -1,0 +1,82 @@
+name: Rust Android Build
+
+on:
+  push:
+    branches: ["ruby", "main"]
+  pull_request:
+    branches: ["ruby", "main"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ANDROID_NDK_VERSION: r28c
+
+jobs:
+  build-android:
+    name: Rust Android Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust target for Android
+      run: rustup target add aarch64-linux-android
+
+    - name: Cache Android NDK
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: .android-ndk
+        key: ndk-${{ env.ANDROID_NDK_VERSION }}
+
+    - name: Download Android NDK if cache missed
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unzip wget
+        wget https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip -O ndk.zip
+        unzip -q ndk.zip -d .
+        mv android-ndk-${ANDROID_NDK_VERSION} .android-ndk
+
+    - name: Configure Cargo linker for aarch64
+      run: |
+        mkdir -p .cargo
+        cat > .cargo/config.toml <<EOF
+        [target.aarch64-linux-android]
+        linker = "${{ github.workspace }}/.android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang"
+        rustflags = ["-C", "link-arg=--sysroot=${{ github.workspace }}/.android-ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot", "-C", "link-arg=-llog"]
+        EOF
+
+    - name: Build release for Android
+      run: cargo build --release --target aarch64-linux-android
+
+    - name: Strip binary
+      run: |
+        ${{ github.workspace }}/.android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
+          target/aarch64-linux-android/release/vibrator-service
+
+    - name: Prepare release folder
+      run: |
+        mkdir -p release/vendor/bin/hw
+        mkdir -p release/vendor/etc/init
+        mkdir -p release/vendor/etc/vintf/manifest
+        mkdir -p release/sepolicy
+        cp target/aarch64-linux-android/release/vibrator-service \
+          release/vendor/bin/hw/vendor.xiaomi.hardware.vibratorfeature.service
+        cp packaging/ruby/vendor/etc/init/vendor.xiaomi.hardware.vibratorfeature.service.rc \
+          release/vendor/etc/init/
+        cp packaging/ruby/vendor/etc/vintf/manifest/vendor.xiaomi.hardware.vibratorfeature.service.xml \
+          release/vendor/etc/vintf/manifest/
+        cp packaging/ruby/sepolicy/sysfs_haptics.cil release/sepolicy/
+        cp packaging/ruby/fs_config.add release/
+        cp packaging/ruby/remove.txt release/
+        cp packaging/ruby/README.md release/README-ruby.md
+        cp LICENSE README.md release/
+        sha256sum release/vendor/bin/hw/vendor.xiaomi.hardware.vibratorfeature.service \
+          > release/SHA256SUMS
+
+    - name: Upload release folder as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ruby-vibratorfeature-aidl
+        path: release

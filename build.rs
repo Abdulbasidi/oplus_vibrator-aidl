@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 const AIDL: &str = "aidl";
-const V3_HASH: &str = "2dad67b7e7f6d4c4ef71f9b0b08e9c0c6a5c3e9d6b2f8d1a4c3e5f60718293a4b";
+// Frozen AIDL v3 hash from AOSP: aidl_api/android.hardware.vibrator/3/.hash
+const V3_HASH: &str = "720a16b521507c378f14c516749ae178a60dfc44";
 
 fn main() {
     let mut b = rsbinder_aidl::Builder::new();

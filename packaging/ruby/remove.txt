@@ -1,0 +1,3 @@
+# Dead stock HIDL init script: its binary is not present in the ruby vendor
+# image, so init logs a failing service on every boot.
+vendor/etc/init/vendor.xiaomi.hardware.vibratorfeature@1.0-service.rc

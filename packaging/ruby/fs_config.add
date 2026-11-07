@@ -1,0 +1,3 @@
+vendor/bin/hw/vendor.xiaomi.hardware.vibratorfeature.service 0 2000 0755
+vendor/etc/init/vendor.xiaomi.hardware.vibratorfeature.service.rc 0 0 0644
+vendor/etc/vintf/manifest/vendor.xiaomi.hardware.vibratorfeature.service.xml 0 0 0644

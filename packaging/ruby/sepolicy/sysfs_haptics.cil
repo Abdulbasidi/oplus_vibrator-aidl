@@ -1,0 +1,21 @@
+# ruby (MT6877) AW869x haptic: /sys/devices/platform/11e00000.i2c0/i2c-0/0-005a
+#
+# Label only the control attributes as sysfs_vibrator. The client directory
+# itself stays generic sysfs, so path traversal uses the stock
+# "allow domain sysfs:dir search" rule and no new allow rules are needed.
+#
+# Existing policy then covers everything:
+#   - init may chown sysfs_vibrator files;
+#   - hal_vibrator_default already has read/write/getattr on sysfs_vibrator.
+#
+# Compile this together with the rest of the vendor policy (merge into
+# vendor_sepolicy or append to the vendor CIL list), exactly like
+# mtk_hal_light_extra.cil.
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/activate (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/activate_mode (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/duration (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/effect_id (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/vmax (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/gain (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/auto_boost (u object_r sysfs_vibrator ((s0) (s0))))
+(genfscon sysfs /devices/platform/11e00000.i2c0/i2c-0/0-005a/ram_vbat_comp (u object_r sysfs_vibrator ((s0) (s0))))

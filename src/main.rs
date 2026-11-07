@@ -24,8 +24,11 @@ fn main() {
     binder.as_binder().set_extension(&oplus_binder.as_binder())
         .unwrap_or_else(|e| eprintln!("failed to set oplus extension: {:?}", e));
 
-    let instance = std::env::var("VIBRATOR_SERVICE_NAME").unwrap_or_else(|_| {
-        "android.hardware.vibrator.IVibrator/default".to_string()
+    // ruby ships a Xiaomi-branded AIDL service that registers
+    // IVibrator/vibratorfeature. COS17/AOSP asks for IVibrator/default, so
+    // publish the same binder under both names.
+    let primary = std::env::var("VIBRATOR_SERVICE_NAME").unwrap_or_else(|_| {
+        "android.hardware.vibrator.IVibrator/vibratorfeature".to_string()
     });
 
     let host = Host::new().unwrap_or_else(|e| {
@@ -33,16 +36,20 @@ fn main() {
         std::process::exit(1);
     });
 
-    host.add_service(&instance, binder.as_binder())
-        .unwrap_or_else(|e| {
-            eprintln!("failed to add service {}: {:?}", instance, e);
-            std::process::exit(1);
-        });
+    let mut instances = vec![primary.clone()];
+    for name in [
+        "android.hardware.vibrator.IVibrator/vibratorfeature",
+        "android.hardware.vibrator.IVibrator/default",
+    ] {
+        if !instances.iter().any(|n| n.as_str() == name) {
+            instances.push(name.to_string());
+        }
+    }
 
-    if instance != "android.hardware.vibrator.IVibrator/default" {
-        host.add_service("android.hardware.vibrator.IVibrator/default", binder.as_binder())
+    for name in &instances {
+        host.add_service(name, binder.as_binder())
             .unwrap_or_else(|e| {
-                eprintln!("warn: failed to add /default: {:?}", e);
+                eprintln!("warn: failed to add service {}: {:?}", name, e);
             });
     }
 
@@ -59,7 +66,10 @@ fn main() {
             });
     }
 
-    eprintln!("vibrator registered: {} + extension + oplus standalone", instance);
+    eprintln!(
+        "vibrator registered: {:?} + extension + oplus standalone",
+        instances
+    );
 
     host.serve().expect("serve");
 }

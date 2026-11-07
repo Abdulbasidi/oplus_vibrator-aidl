@@ -1,0 +1,8 @@
+<manifest version="1.0" type="device">
+    <hal format="aidl" override="true">
+        <name>android.hardware.vibrator</name>
+        <version>3</version>
+        <fqname>IVibrator/vibratorfeature</fqname>
+        <fqname>IVibrator/default</fqname>
+    </hal>
+</manifest>

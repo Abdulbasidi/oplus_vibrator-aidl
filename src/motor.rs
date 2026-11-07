@@ -7,9 +7,16 @@
 use std::fs;
 use std::io;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
+
+
+const HAPTIC_NAME: &str = "awinic_haptic";
+
+
+/// ruby (MT6877) wires the AW869x haptic to i2c0 at address 0x5a.
+const RUBY_HAPTIC_PATH: &str = "/sys/bus/i2c/devices/0-005a";
 
 
 const VMAX_LO: u16 = 0x28;
@@ -28,36 +35,68 @@ pub struct Motor {
     counter: i32,
 }
 
+fn has_haptic_name(dir: &Path) -> bool {
+    fs::read_to_string(dir.join("name"))
+        .map(|s| s.trim() == HAPTIC_NAME)
+        .unwrap_or(false)
+}
+
+
+fn find_haptic_dir() -> io::Result<PathBuf> {
+    // Debug/porting override. Do not stat() it: the HAL domain is not granted
+    // getattr on generic sysfs, only read/write/open.
+    if let Ok(path) = std::env::var("VIBRATOR_SYSFS") {
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    // ruby: the haptic node is aw869x_haptic@5a on &i2c0.
+    for candidate in [RUBY_HAPTIC_PATH, "/sys/bus/i2c/drivers/awinic_haptic/0-005a"] {
+        let p = PathBuf::from(candidate);
+        if has_haptic_name(&p) {
+            return Ok(p);
+        }
+    }
+
+    // Fallback: any i2c bus exposing the awinic haptic driver.
+    for base in ["/sys/bus/i2c/drivers/awinic_haptic", "/sys/bus/i2c/devices"] {
+        let entries = match fs::read_dir(base) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if has_haptic_name(&p) {
+                return Ok(p);
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "{} sysfs dir not found (looked at {} and all i2c buses)",
+            HAPTIC_NAME, RUBY_HAPTIC_PATH
+        ),
+    ))
+}
+
+
 impl Motor {
     pub fn open() -> io::Result<Motor> {
-        let mut dir = None;
-        for entry in fs::read_dir("/sys/bus/i2c/devices")? {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_name().to_string_lossy().starts_with("2-") {
-                continue;
-            }
-            let p = entry.path();
-            if let Ok(s) = fs::read_to_string(p.join("name")) {
-                if s.trim() == "awinic_haptic" {
-                    dir = Some(p);
-                    break;
-                }
-            }
-        }
-        let dir = dir.ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "awinic_haptic sysfs dir not found")
+        let dir = find_haptic_dir()?;
+
+        // SELinux grants read/write/open but not getattr on generic sysfs,
+        // so Path::exists() can fail on a perfectly usable node. Probe with
+        // an actual read instead.
+        fs::read_to_string(dir.join("activate")).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("awinic node {} is not readable: {}", dir.join("activate").display(), e),
+            )
         })?;
-        for f in ["gain", "duration", "activate", "activate_mode", "effect_id", "vmax"] {
-            if !dir.join(f).exists() {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("awinic node {} missing", f),
-                ));
-            }
-        }
+
         let m = Motor {
             dir,
             running_kind: 0,
@@ -66,7 +105,10 @@ impl Motor {
 
         let _ = m.write_sysfs("auto_boost", "1");
         let _ = m.write_sysfs("ram_vbat_comp", "0");
-        crate::alogd!("motor opened: auto_boost=1 ram_vbat_comp=0");
+        crate::alogd!(
+            "motor opened: {} auto_boost=1 ram_vbat_comp=0",
+            m.dir.display()
+        );
         Ok(m)
     }
 

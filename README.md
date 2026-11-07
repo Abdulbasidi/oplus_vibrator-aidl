@@ -4,11 +4,15 @@ Rust AIDL vibrator HAL for Qualcomm devices using the `awinic_haptic` driver.
 It implements Android's `android.hardware.vibrator.IVibrator` HAL and exposes an
 OPlus/ColorOS vibrator extension on the same binder.
 
-The main service is registered as:
+The main service is registered as both:
 
 ```
+android.hardware.vibrator.IVibrator/vibratorfeature
 android.hardware.vibrator.IVibrator/default
 ```
+
+`/vibratorfeature` matches the Xiaomi service that ships on ruby, while
+`/default` is what COS17/AOSP looks up.
 
 The OPlus extension is attached to that binder and is also registered as a
 standalone service:
@@ -19,15 +23,15 @@ oplus.hardware.vibrator_oplus_v1
 ```
 
 The service name can be overridden with the `VIBRATOR_SERVICE_NAME` environment
-variable. If an override is used, the normal `/default` instance is also
-registered.
+variable. The standard `/vibratorfeature` and `/default` instances are always
+registered as well.
 
 ## Features
 
 ### Android vibrator HAL
 
 - Implements `android.hardware.vibrator.IVibrator` version 3.
-- Registers the default AIDL instance as `IVibrator/default`.
+- Registers both `IVibrator/vibratorfeature` and `IVibrator/default`.
 - Uses `rsbinder` and does not depend on `libbinder_ndk`.
 - Reports callback, amplitude-control, and external-control capabilities.
 - Supports timed playback through `on()` and completion callbacks.
@@ -82,7 +86,8 @@ Environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `VIBRATOR_SERVICE_NAME` | `android.hardware.vibrator.IVibrator/default` | Primary IVibrator instance |
+| `VIBRATOR_SERVICE_NAME` | `android.hardware.vibrator.IVibrator/vibratorfeature` | Extra primary IVibrator instance |
+| `VIBRATOR_SYSFS` | auto-detect | Explicit awinic haptic sysfs directory |
 | `HOSHIVK_RING_PATTERN` | `60,50,60,50,60,220` | External-control pulse/gap pattern in ms |
 | `HOSHIVK_RING_AMP` | `1.6` | External-control amplitude, clamped to `0.0`-`2.0` |
 
@@ -103,9 +108,16 @@ Environment variables:
 
 ### Motor backend
 
-- Detects `awinic_haptic` through `/sys/bus/i2c/devices/2-*`.
-- Requires the `gain`, `duration`, `activate`, `activate_mode`, `effect_id`,
-  and `vmax` sysfs nodes.
+- Prefers `/sys/bus/i2c/devices/0-005a` (ruby/MT6877: `aw869x_haptic@5a` on
+  `&i2c0`), then `/sys/bus/i2c/drivers/awinic_haptic/0-005a`.
+- Falls back to scanning every i2c bus for a client whose `name` is
+  `awinic_haptic`.
+- `VIBRATOR_SYSFS` can point at an explicit sysfs directory for debugging or
+  for boards with a different bus.
+- Probes `activate` with a real read instead of `stat()`; SELinux grants the HAL
+  read/write/open but not getattr on generic sysfs.
+- Writes `gain`, `duration`, `activate_mode`, `effect_id`, and `vmax` on demand.
+- Attaches lazily and retries every 5 s while the motor is unavailable.
 - Enables `auto_boost` at startup.
 - Disables `ram_vbat_comp` at startup and retries after playback starts.
 - Routes effects to light, normal, or heavy motor waveforms based on the effect
@@ -211,15 +223,18 @@ is generated at version 2. Both use synchronous binder methods.
 - It needs read/write access to the `awinic_haptic` I2C sysfs directory.
 - It needs permission to register binder services.
 - SELinux policy must allow both the sysfs access and binder registration.
-- No init service definition or vendor makefile is included.
+- `packaging/ruby/` contains the init script, VINTF fragment, fs_config and the
+  `sysfs_vibrator` genfscon used by the Redmi Note 12 Pro 5G.
 - Start the binary from the vendor init configuration used by the target ROM.
 - The service keeps running without a motor, but vibration calls become no-ops.
 
 ## Compatibility
 
-The motor backend expects the `awinic_haptic` driver on I2C bus 2 with the sysfs
-interface used by the target kernel. Different drivers or node layouts require
-changes in `src/motor.rs`.
+The motor backend defaults to the ruby/MT6877 layout: `aw869x_haptic@5a` on
+`i2c0`, exposed as `/sys/bus/i2c/devices/0-005a`. It also scans
+`/sys/bus/i2c/drivers/awinic_haptic` and then every i2c bus for a client whose
+`name` is `awinic_haptic`. Different drivers or node layouts require changes in
+`src/motor.rs` or `VIBRATOR_SYSFS`.
 
 The AIDL interfaces are VINTF-stable. The OPlus extension is vendor-specific and
 does not replace the framework's normal `IVibrator/default` service.

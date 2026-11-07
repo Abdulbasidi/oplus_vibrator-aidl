@@ -61,6 +61,7 @@ fn map_slider_amp(a: f32) -> f32 {
 
 pub struct Inner {
     motor: Option<Motor>,
+    motor_retry_at: std::time::Instant,
     current: i32,
     last_base: u16,
     last_len: u16,
@@ -75,17 +76,43 @@ pub struct Inner {
 
 impl Inner {
 
-
+    /// Attach the motor lazily. The driver may probe after the HAL starts,
+    /// so retry on demand instead of staying dead for the whole boot.
+    pub(crate) fn ensure_motor(&mut self) -> bool {
+        if self.motor.is_some() {
+            return true;
+        }
+        let now = std::time::Instant::now();
+        if now < self.motor_retry_at {
+            return false;
+        }
+        self.motor_retry_at = now + Duration::from_secs(5);
+        match Motor::open() {
+            Ok(m) => {
+                alogd!("motor attached (lazy retry)");
+                self.motor = Some(m);
+                true
+            }
+            Err(e) => {
+                aloge!("motor open retry failed: {:?}", e);
+                false
+            }
+        }
+    }
 
     pub(crate) fn ring_pulse(&mut self, len_ms: u16, amp: f32) -> bool {
         self.stop_effect();
-        let ok = match self.motor.as_mut() {
-            Some(_) if amp <= 0.0001 => {
-                alogd!("ring pulse suppressed (amp=0)");
-                false
+        let ok = if !self.ensure_motor() {
+            false
+        } else {
+            match self.motor.as_mut() {
+                Some(_) if amp <= 0.0001 => {
+                    alogd!("ring pulse suppressed (amp=0)");
+                    false
+                }
+                Some(m) => m.play_loop(len_ms, amp).is_ok(),
+                None => false,
             }
-            Some(m) => m.play_loop(len_ms, amp).is_ok(),
-            None => false,
         };
         if ok {
             self.current = 1;
@@ -120,14 +147,18 @@ impl Inner {
         self.stop_effect();
         let use_tap = !sustain || len_ms < SUSTAIN_MIN_MS;
         let eid = self.effect_id_for(base);
-        let ok = match self.motor.as_mut() {
-            Some(_) if amp <= 0.0001 => {
-                alogd!("upload suppressed (amp=0)");
-                false
+        let ok = if !self.ensure_motor() {
+            false
+        } else {
+            match self.motor.as_mut() {
+                Some(_) if amp <= 0.0001 => {
+                    alogd!("upload suppressed (amp=0)");
+                    false
+                }
+                Some(m) if use_tap => m.play_tap(eid, amp, len_ms).is_ok(),
+                Some(m) => m.play_loop(len_ms, amp).is_ok(),
+                None => false,
             }
-            Some(m) if use_tap => m.play_tap(eid, amp, len_ms).is_ok(),
-            Some(m) => m.play_loop(len_ms, amp).is_ok(),
-            None => false,
         };
         if ok {
             self.current = 1;
@@ -145,6 +176,9 @@ impl Inner {
         }
         if self.amplitude <= 0.0001 {
             self.stop_effect();
+            return;
+        }
+        if !self.ensure_motor() {
             return;
         }
         if let Some(m) = self.motor.as_mut() {
@@ -175,6 +209,7 @@ impl VibratorService {
         VibratorService {
             inner: Arc::new(Mutex::new(Inner {
                 motor,
+                motor_retry_at: std::time::Instant::now(),
                 current: -1,
                 last_base: 0,
                 last_len: 0,
@@ -283,7 +318,7 @@ impl VibratorService {
         }
 
         let has_motor = match inner.lock() {
-            Ok(i) => i.motor.is_some(),
+            Ok(mut i) => i.ensure_motor(),
             Err(_) => false,
         };
         if !has_motor {
