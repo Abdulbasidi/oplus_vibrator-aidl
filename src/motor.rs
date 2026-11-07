@@ -35,6 +35,14 @@ pub struct Motor {
     counter: i32,
 }
 
+/// HAL amplitude domain is 0.0..1.0, where 1.0 means full drive.
+/// The stock awinic curves are roughly linear in register value, so use a
+/// mild perceptual exponent to keep low levels usable without overdriving
+/// the top end.
+fn drive_level(amplitude: f32) -> f32 {
+    amplitude.clamp(0.0, 1.0).powf(0.7)
+}
+
 fn has_haptic_name(dir: &Path) -> bool {
     fs::read_to_string(dir.join("name"))
         .map(|s| s.trim() == HAPTIC_NAME)
@@ -151,10 +159,9 @@ impl Motor {
     pub fn play_tap(&mut self, effect_id: u16, amplitude: f32, _len_ms: u16) -> io::Result<i32> {
         let _ = self.set_motor(false);
         self.write_sysfs("activate_mode", "0")?;
-        let raw_t = amplitude.clamp(0.0, 2.0) / 2.0;
-        let t = raw_t.sqrt();
-        let v = (VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t) as u16;
-        let g = (1.0 + (GAIN_HI as f32 - 1.0) * t) as u16;
+        let t = drive_level(amplitude);
+        let v = (VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16;
+        let g = (1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16;
         let (v, g) = (v.min(VMAX_HI), g.min(GAIN_HI));
         self.write_sysfs("vmax", &v.to_string())?;
         self.write_sysfs("gain", &g.to_string())?;
@@ -180,9 +187,8 @@ impl Motor {
 
     pub fn play_loop(&mut self, length_ms: u16, amplitude: f32) -> io::Result<i32> {
         let _ = self.set_motor(false);
-        let raw_t = (amplitude * 2.0).clamp(0.0, 2.0) / 2.0;
-        let t = raw_t * raw_t;
-        let g = (1.0 + (GAIN_HI as f32 - 1.0) * t) as u16;
+        let t = drive_level(amplitude);
+        let g = (1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16;
         let g = g.min(GAIN_HI);
         let v = VMAX_HI;
 
@@ -206,18 +212,15 @@ impl Motor {
 
 
     pub fn update(&mut self, _id: i32, amplitude: f32) -> io::Result<()> {
+        let t = drive_level(amplitude);
+        let g = ((1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16).min(GAIN_HI);
         if self.running_kind == 2 {
-            let raw_t = (amplitude * 2.0).clamp(0.0, 2.0) / 2.0;
-            let t = raw_t * raw_t;
-            let g = (1.0 + (GAIN_HI as f32 - 1.0) * t) as u16;
-            let _ = self.set_gain(g.min(GAIN_HI));
+            let _ = self.set_gain(g);
         } else if self.running_kind == 1 {
-            let raw_t = amplitude.clamp(0.0, 2.0) / 2.0;
-            let t = raw_t.sqrt();
-            let g = (1.0 + (GAIN_HI as f32 - 1.0) * t) as u16;
-            let v = (VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t) as u16;
-            let _ = self.write_sysfs("vmax", &v.min(VMAX_HI).to_string());
-            let _ = self.set_gain(g.min(GAIN_HI));
+            let v = ((VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16)
+                .min(VMAX_HI);
+            let _ = self.write_sysfs("vmax", &v.to_string());
+            let _ = self.set_gain(g);
         }
         Ok(())
     }

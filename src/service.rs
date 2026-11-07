@@ -42,22 +42,11 @@ const SUSTAIN_MIN_MS: u16 = 250;
 
 const DEFAULT_RING_PATTERN: &[u16] = &[60, 50, 60, 50, 60, 220];
 
-const DEFAULT_RING_AMP: f32 = 1.6;
+const DEFAULT_RING_AMP: f32 = 1.0;
 
-const SLIDER_IN_LO: f32 = 1.4583334;
-const SLIDER_IN_HI: f32 = 2.0;
-const SLIDER_OUT_LO: f32 = 0.5;
-const SLIDER_OUT_HI: f32 = 2.0;
-
-fn map_slider_amp(a: f32) -> f32 {
-    if a <= SLIDER_IN_LO {
-        (a * (SLIDER_OUT_LO / SLIDER_IN_LO)).clamp(0.0, SLIDER_OUT_LO)
-    } else {
-        SLIDER_OUT_LO
-            + (a - SLIDER_IN_LO) / (SLIDER_IN_HI - SLIDER_IN_LO)
-                * (SLIDER_OUT_HI - SLIDER_OUT_LO)
-    }
-}
+/// Strong short click from the stock awinic RAM bank (W4, ~31 ms). Used for
+/// plain on() pulses and unknown effects, never for OPlus waveform ids.
+const DEFAULT_TAP_EID: u16 = 3;
 
 pub struct Inner {
     motor: Option<Motor>,
@@ -131,22 +120,21 @@ impl Inner {
         self.current = -1;
     }
 
-    fn effect_id_for(&self, base: u16) -> u16 {
-        if base <= 0xAAAA {
-            2
-        } else if base >= 0xEEEE {
-            7
-        } else {
-            1
-        }
+    pub(crate) fn upload(&mut self, eid: u16, len_ms: u16, sustain: bool) -> bool {
+        let amp = self.amplitude.clamp(0.0, 1.0);
+        self.upload_with_amp(eid, len_ms, sustain, amp)
     }
 
-
-    pub(crate) fn upload(&mut self, base: u16, len_ms: u16, sustain: bool) -> bool {
-        let amp = self.amplitude.max(0.0);
+    pub(crate) fn upload_with_amp(
+        &mut self,
+        eid: u16,
+        len_ms: u16,
+        sustain: bool,
+        amplitude: f32,
+    ) -> bool {
+        let amp = amplitude.clamp(0.0, 1.0);
         self.stop_effect();
-        let use_tap = !sustain || len_ms < SUSTAIN_MIN_MS;
-        let eid = self.effect_id_for(base);
+        let use_loop = sustain && len_ms >= SUSTAIN_MIN_MS;
         let ok = if !self.ensure_motor() {
             false
         } else {
@@ -155,22 +143,55 @@ impl Inner {
                     alogd!("upload suppressed (amp=0)");
                     false
                 }
-                Some(m) if use_tap => m.play_tap(eid, amp, len_ms).is_ok(),
+                Some(m) if use_loop => m.play_loop(len_ms, amp).is_ok(),
+                Some(m) => m.play_tap(eid, amp, len_ms).is_ok(),
+                None => false,
+            }
+        };
+        if ok {
+            self.current = 1;
+            self.last_base = eid;
+            self.last_len = len_ms;
+        } else {
+            aloge!("upload failed (eid={} amp={:.2} len={})", eid, amp, len_ms);
+        }
+        ok
+    }
+
+    /// Play one preloaded RAM waveform and let it run for its own length.
+    /// `linearMotorVibratorOff` from the OPlus framework only cuts it short.
+    pub(crate) fn play_ram(&mut self, eid: u16, amplitude: f32) -> bool {
+        self.upload_with_amp(eid, 0, false, amplitude)
+    }
+
+    /// Continuous (CONT) drive with an explicit duration. Used for OPlus
+    /// effects that are longer than a single RAM waveform.
+    pub(crate) fn play_cont(&mut self, len_ms: u16, amplitude: f32) -> bool {
+        let amp = amplitude.clamp(0.0, 1.0);
+        self.stop_effect();
+        let ok = if !self.ensure_motor() {
+            false
+        } else {
+            match self.motor.as_mut() {
+                Some(_) if amp <= 0.0001 => {
+                    alogd!("cont suppressed (amp=0)");
+                    false
+                }
                 Some(m) => m.play_loop(len_ms, amp).is_ok(),
                 None => false,
             }
         };
         if ok {
             self.current = 1;
-            self.last_base = base;
+            self.last_base = 0;
             self.last_len = len_ms;
         } else {
-            aloge!("upload failed (amp={:.2} len={})", amp, len_ms);
+            aloge!("cont failed (amp={:.2} len={})", amp, len_ms);
         }
         ok
     }
 
-    fn rescale_current(&mut self) {
+    pub(crate) fn rescale_current(&mut self) {
         if self.current < 0 {
             return;
         }
@@ -430,7 +451,7 @@ fn ring_config() -> (Vec<u16>, f32) {
     let amp = std::env::var("HOSHIVK_RING_AMP")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
-        .map(|a| a.clamp(0.0, 2.0))
+        .map(|a| a.clamp(0.0, 1.0))
         .unwrap_or(DEFAULT_RING_AMP);
 
     (pattern, amp)
@@ -465,7 +486,7 @@ impl IVibrator for VibratorService {
         };
         let ok = {
             match self.inner.lock() {
-                Ok(mut inner) => inner.upload(0xFFFF, len, len >= SUSTAIN_MIN_MS),
+                Ok(mut inner) => inner.upload(DEFAULT_TAP_EID, len, len >= SUSTAIN_MIN_MS),
                 Err(_) => false,
             }
         };
@@ -486,20 +507,20 @@ impl IVibrator for VibratorService {
         strength: EffectStrength,
         callback: Option<&Strong<dyn IVibratorCallback>>,
     ) -> BinderResult<i32> {
-        let (len, base) = map_effect(effect);
+        let (eid, len) = map_effect(effect);
         let scale = match strength {
-            EffectStrength::LIGHT => 0.6,
+            EffectStrength::LIGHT => 0.65,
             EffectStrength::MEDIUM => 0.85,
             EffectStrength::STRONG => 1.0,
             _ => 0.85,
         };
-        let mag = (base as f32 * scale) as u16;
         let gen = self.next_gen();
 
-        alogd!("perform effect={:?} strength={:?} len={} base={} mag={} scale={:.2}", effect, strength, len, base, mag, scale);
+        alogd!("perform effect={:?} strength={:?} len={} eid={} scale={:.2}", effect, strength, len, eid, scale);
 
         if let Ok(mut inner) = self.inner.lock() {
-            inner.upload(mag, len, false);
+            let amp = (inner.amplitude * scale).clamp(0.0, 1.0);
+            inner.upload_with_amp(eid, len, false, amp);
         }
         self.schedule_finish(gen, len as u32, callback, false);
         Ok(len as i32)
@@ -518,7 +539,9 @@ impl IVibrator for VibratorService {
     }
 
     fn r#setAmplitude(&self, amplitude: f32) -> BinderResult<()> {
-        let amp = map_slider_amp(amplitude.clamp(0.0, 2.0)).clamp(0.0, 2.0);
+        // AOSP defines 1.0 as the maximum amplitude. Mapping it down to a
+        // fraction is what made the generic/IME paths feel weak.
+        let amp = amplitude.clamp(0.0, 1.0);
         if let Ok(mut inner) = self.inner.lock() {
             inner.amplitude = amp;
             inner.rescale_current();
@@ -590,9 +613,27 @@ impl IVibrator for VibratorService {
             return Ok(());
         }
         let gen = self.next_gen();
-        alogd!("compose steps={} max_delay={} total={} rhythm={}", steps, max_delay, total, rhythm);
+        let eid = if peak >= 0xEEEE {
+            0
+        } else if peak <= 0xAAAA {
+            7
+        } else {
+            3
+        };
+        // CompositeEffect.scale: 0 is the minimum feelable level, 1 is max.
+        let scale = (0.25 + 0.75 * (peak as f32 / 0xFFFF as f32)).clamp(0.0, 1.0);
+        alogd!(
+            "compose steps={} max_delay={} total={} rhythm={} eid={} scale={:.2}",
+            steps,
+            max_delay,
+            total,
+            rhythm,
+            eid,
+            scale
+        );
         if let Ok(mut inner) = self.inner.lock() {
-            inner.upload(peak, total, rhythm);
+            let amp = (inner.amplitude * scale).clamp(0.0, 1.0);
+            inner.upload_with_amp(eid, total, rhythm, amp);
         }
         self.schedule_finish(gen, total as u32, callback, false);
         Ok(())
@@ -610,7 +651,7 @@ impl IVibrator for VibratorService {
     ) -> BinderResult<()> {
         let gen = self.next_gen();
         if let Ok(mut inner) = self.inner.lock() {
-            inner.upload(0xDDDD, 0xFFFF, false);
+            inner.upload(4, 0xFFFF, true);
         }
         self.schedule_finish(gen, 0, None, true);
         Ok(())
@@ -704,15 +745,19 @@ use crate::gen::android::hardware::vibrator::CompositePwleV2::CompositePwleV2;
 use crate::gen::android::hardware::vibrator::FrequencyAccelerationMapEntry::FrequencyAccelerationMapEntry as FontMatrixEntry;
 use crate::gen::android::hardware::vibrator::PrimitivePwle::PrimitivePwle;
 
+/// Map an AOSP effect onto the stock awinic RAM bank.
+/// Slots 0..9 are the stock Android effects, slot 10 is the short loop
+/// segment, so each effect gets its own waveform instead of the old
+/// "everything is eid 7" mapping.
 fn map_effect(effect: Effect) -> (u16, u16) {
     match effect {
-        Effect::CLICK => (60, 0xFFFF),
-        Effect::DOUBLE_CLICK => (130, 0xFFFF),
-        Effect::TICK => (25, 0xAAAA),
-        Effect::THUD => (110, 0xFFFF),
-        Effect::POP => (35, 0xFFFF),
-        Effect::HEAVY_CLICK => (80, 0xFFFF),
-        Effect::TEXTURE_TICK => (12, 0x7777),
+        Effect::CLICK => (0, 48),
+        Effect::DOUBLE_CLICK => (1, 56),
+        Effect::TICK => (3, 32),
+        Effect::THUD => (4, 85),
+        Effect::POP => (1, 56),
+        Effect::HEAVY_CLICK => (0, 48),
+        Effect::TEXTURE_TICK => (7, 22),
         Effect::RINGTONE_1
         | Effect::RINGTONE_2
         | Effect::RINGTONE_3
@@ -727,11 +772,8 @@ fn map_effect(effect: Effect) -> (u16, u16) {
         | Effect::RINGTONE_12
         | Effect::RINGTONE_13
         | Effect::RINGTONE_14
-        | Effect::RINGTONE_15 => (200, 0xCCCC),
-
-
-
-        _ => (20, 0xAAAA),
+        | Effect::RINGTONE_15 => (4, 85),
+        _ => (DEFAULT_TAP_EID, 32),
     }
 }
 

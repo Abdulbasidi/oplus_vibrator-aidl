@@ -9,16 +9,42 @@ pub struct OplusVibrator {
     inner: Arc<Mutex<Inner>>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OplusEffect {
+    Ram(u16),
+    Cont(u16),
+}
+
+/// COS17 sends waveform ids from its own bank. Translate the ids we actually
+/// observe into the stock awinic RAM bank, matching the intended duration.
+fn oplus_effect(waveform_id: i32) -> OplusEffect {
+    match waveform_id {
+        1 => OplusEffect::Ram(3),   // short tick (~35 ms)
+        2 => OplusEffect::Ram(0),   // click (~45 ms)
+        7 => OplusEffect::Ram(3),   // touch tick (~30 ms)
+        111 => OplusEffect::Ram(3), // IME key press (~36 ms)
+        310 => OplusEffect::Ram(4), // virtual key (~80 ms)
+        315 => OplusEffect::Cont(150), // volume tick (~155 ms)
+        id if (0..=10).contains(&id) => OplusEffect::Ram(id as u16),
+        _ => OplusEffect::Ram(3),
+    }
+}
+
 impl OplusVibrator {
     pub fn new(inner: Arc<Mutex<Inner>>) -> Self {
         OplusVibrator { inner }
     }
 
+    /// OPlus strength domain is 0..2400, where 2400 is the slider maximum.
     fn strength_to_amplitude(strength: i32) -> f32 {
         let s = (strength as f32).clamp(0.0, 2400.0);
-        let t = (s / 1200.0).clamp(0.0, 2.0);
-        let t = t.powf(0.8);
-        t.clamp(0.0, 2.0)
+        (s / 2400.0).clamp(0.0, 1.0)
+    }
+
+    /// Raw 0..255 amplitude used by the older OPlus on()/setAmplitude() calls.
+    fn raw_amplitude(amplitude: i32) -> f32 {
+        let a = (amplitude as f32).clamp(0.0, 255.0);
+        (a / 255.0).clamp(0.0, 1.0)
     }
 }
 
@@ -32,13 +58,27 @@ impl IOplusVibrator for OplusVibrator {
         Ok(())
     }
 
-    fn r#linearMotorVibratorOn(&self, duration: i32, strength: i32, _extra: bool) -> BinderResult<()> {
+    fn r#linearMotorVibratorOn(&self, waveform_id: i32, strength: i32, is_rtp: bool) -> BinderResult<()> {
         let amp = Self::strength_to_amplitude(strength);
-        alogi!("linearMotorVibratorOn dur={} strength={} amp={:.2}", duration, strength, amp);
+        let effect = oplus_effect(waveform_id);
+        alogi!(
+            "linearMotorVibratorOn waveformId={} strength={} rtp={} amp={:.2} -> {:?}",
+            waveform_id,
+            strength,
+            is_rtp,
+            amp,
+            effect
+        );
         if let Ok(mut inner) = self.inner.lock() {
             inner.amplitude = amp;
-            let len = (duration as u16).max(500);
-            inner.upload(0xFFFF, len, false);
+            match effect {
+                OplusEffect::Ram(eid) => {
+                    inner.play_ram(eid, amp);
+                }
+                OplusEffect::Cont(ms) => {
+                    inner.play_cont(ms, amp);
+                }
+            }
         }
         Ok(())
     }
@@ -74,9 +114,10 @@ impl IOplusVibrator for OplusVibrator {
     }
 
     fn r#setAmplitude(&self, amplitude: i32, _cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
-        let amp = (amplitude as f32).clamp(0.0, 2.0);
+        let amp = Self::raw_amplitude(amplitude);
         if let Ok(mut inner) = self.inner.lock() {
             inner.amplitude = amp;
+            inner.rescale_current();
         }
         alogd!("oplus setAmplitude({}) -> amp={:.2}", amplitude, amp);
         Ok(())
@@ -99,11 +140,11 @@ impl IOplusVibrator for OplusVibrator {
     }
 
     fn r#on(&self, amplitude: i32, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
-        let amp = Self::strength_to_amplitude(amplitude);
+        let amp = Self::raw_amplitude(amplitude);
         alogd!("oplus on({}) -> amp={:.2}", amplitude, amp);
         if let Ok(mut inner) = self.inner.lock() {
             inner.amplitude = amp;
-            inner.upload(0xFFFF, 2000, false);
+            inner.play_cont(2000, amp);
         }
         if let Some(cb) = cb { let _ = cb.onCallback(0); }
         Ok(())
@@ -134,7 +175,7 @@ impl IOplusVibrator for OplusVibrator {
         let bursts = a.clamp(1, 16);
         let gap = b.clamp(0, 500) as u64;
         let amp = if (0..=255).contains(&c) {
-            ((c as f32) / 255.0) * 1.8
+            Self::raw_amplitude(c)
         } else {
             1.0
         };
