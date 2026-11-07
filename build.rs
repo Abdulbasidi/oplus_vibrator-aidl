@@ -2,6 +2,13 @@ use std::path::PathBuf;
 
 const AIDL: &str = "aidl";
 // Frozen AIDL v3 hash from AOSP: aidl_api/android.hardware.vibrator/3/.hash
+// (verified against android-16.0.0_r1). AIDL freezes one hash per package
+// version, so IVibrator and IVibratorCallback share it.
+//
+// The stock ruby service is older: its strings contain eeab78b6... which is
+// the v1 package hash, plus e5c4e957... for Xiaomi's IVibratorExt. Neither
+// matters for this HAL: we publish v3 and the framework negotiates down from
+// its own version.
 const V3_HASH: &str = "720a16b521507c378f14c516749ae178a60dfc44";
 
 fn main() {
@@ -56,7 +63,13 @@ fn main() {
 
     b2 = b2.source(PathBuf::from(AIDL)
         .join("vendor/oplus/hardware/oplusvibrator/IOplusVibrator.aidl"));
-    b2 = b2.version(2).hash("-1");
+    // Real COS17 interface from /system/framework/oplus-services.jar:
+    // IOplusVibrator.VERSION = 2 and HASH = b103e6d8...
+    // Its method table includes performEnvelope/performRtp and orders
+    // getSupportFeatures at transaction 21. Our previous unversioned AIDL
+    // put it at 20, so system_server read an empty reply and died with
+    // ParcelFormatException("Not enough data").
+    b2 = b2.version(2).hash("b103e6d812aa472b9c5b7deefd7986fa729ce1a8");
 
     b2.output(PathBuf::from("oplus_vibrator.rs"))
         .generate()

@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use rsbinder::{Strong, BinderResult};
+use rsbinder::{Strong, BinderResult, ParcelFileDescriptor};
 use crate::gen_oplus::vendor::oplus::hardware::oplusvibrator::IOplusVibrator::IOplusVibrator;
 use crate::gen_oplus::vendor::aac::hardware::richtap::vibrator::IRichtapCallback::IRichtapCallback;
 use crate::service::Inner;
@@ -114,6 +114,18 @@ impl IOplusVibrator for OplusVibrator {
         Ok(0)
     }
 
+    fn r#performEnvelope(&self, env_info: &[i32], fast_flag: bool, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
+        alogd!("oplus performEnvelope len={} fast={}", env_info.len(), fast_flag);
+        if let Some(cb) = cb { let _ = cb.onCallback(0); }
+        Ok(())
+    }
+
+    fn r#performRtp(&self, _hdl: Option<&ParcelFileDescriptor>, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
+        alogd!("oplus performRtp");
+        if let Some(cb) = cb { let _ = cb.onCallback(0); }
+        Ok(())
+    }
+
     fn r#performHe(&self, a: i32, b: i32, c: i32, d: i32, e: &[i32], cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
         let pattern: Vec<i32> = e.iter().take(24).copied().collect();
         alogd!("oplus performHe(looper={} interval={} amp={} freq={} pattern_len={} pattern={:?})",
@@ -162,7 +174,10 @@ impl IOplusVibrator for OplusVibrator {
     }
 
     fn r#getSupportFeatures(&self) -> BinderResult<Vec<u8>> {
-        Ok(vec![0x03])
+        // java.util.Properties text expected by VibratorFeatureLoader.
+        // Empty means "no OPlus/RichTap/Qualcomm-LM extensions": system_server
+        // then drives us through the plain android.hardware.vibrator AIDL.
+        Ok(Vec::new())
     }
 
     fn r#writeGunType(&self, _type: i32) -> BinderResult<()> {
@@ -177,8 +192,8 @@ impl IOplusVibrator for OplusVibrator {
         Ok(())
     }
 
-    fn r#writeHapticAudio(&self, _data: &[i32]) -> BinderResult<()> {
-        alogd!("oplus writeHapticAudio len={}", _data.len());
+    fn r#writeHapticAudio(&self, buffer: &str) -> BinderResult<()> {
+        alogd!("oplus writeHapticAudio len={}", buffer.len());
         Ok(())
     }
 
