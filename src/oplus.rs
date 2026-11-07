@@ -120,7 +120,7 @@ impl IOplusVibrator for OplusVibrator {
         Ok(())
     }
 
-    fn r#performRtp(&self, _hdl: Option<&ParcelFileDescriptor>, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
+    fn r#performRtp(&self, _hdl: &ParcelFileDescriptor, cb: Option<&Strong<dyn IRichtapCallback>>) -> BinderResult<()> {
         alogd!("oplus performRtp");
         if let Some(cb) = cb { let _ = cb.onCallback(0); }
         Ok(())
