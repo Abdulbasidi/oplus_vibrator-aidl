@@ -65,12 +65,14 @@ Supported predefined effects:
 ### Amplitude behavior
 
 - Tracks the current amplitude in shared state.
-- Remaps the framework slider range so the lowest framework step starts at a
-  thinner `0.5` amplitude and the highest step remains at `2.0`.
 - Rescales the running motor immediately when amplitude changes.
-- Applies a square-root response curve for tap effects.
-- Applies a squared response curve for continuous effects.
-- Supports amplitudes from `0.0` to `2.0`.
+- Applies a 0.7-power perceptual curve for tap effects.
+- Long continuous (CONT) playback, including incoming-call ring pulses, is
+  capped at 60% of the tap drive and scales both `vmax` and `gain`. This keeps
+  a 750 ms ring pulse from running at full `vmax=0x50`/`gain=0xB4`.
+- The CONT cap can be tuned at runtime with
+  `setprop debug.hoshikv.loop_scale 0.45` (`0.2`-`1.0`); the default is `0.60`.
+- Supports amplitudes from `0.0` to `1.0`.
 
 ### External control
 

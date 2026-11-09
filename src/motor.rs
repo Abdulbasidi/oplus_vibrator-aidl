@@ -24,6 +24,13 @@ const VMAX_HI: u16 = 0x50;
 
 const GAIN_HI: u16 = 0xB4;
 
+/// Long CONT pulses (incoming-call ringtone, alarms, always-on) accumulate far
+/// more energy than a short tap. Keep them below the tap drive so a 750 ms
+/// ring pulse no longer runs at full vmax/gain. Can be tuned at runtime with
+/// `setprop debug.hoshikv.loop_scale 0.45` (clamped to 0.2..1.0).
+const LOOP_DRIVE_SCALE: f32 = 0.60;
+const LOOP_SCALE_PROP: &[u8] = b"debug.hoshikv.loop_scale\0";
+
 
 const CONT_DRV1: u16 = 0x7F;
 const CONT_DRV2: u16 = 0x36;
@@ -41,6 +48,35 @@ pub struct Motor {
 /// the top end.
 fn drive_level(amplitude: f32) -> f32 {
     amplitude.clamp(0.0, 1.0).powf(0.7)
+}
+
+fn loop_scale() -> f32 {
+    extern "C" {
+        fn __system_property_get(name: *const std::ffi::c_char, value: *mut std::ffi::c_char) -> i32;
+    }
+
+    // PROP_VALUE_MAX is 92 on Android; keep the full size so a long value
+    // cannot overrun the buffer in __system_property_get.
+    let mut buf = [0 as std::ffi::c_char; 92];
+    let n = unsafe {
+        __system_property_get(
+            LOOP_SCALE_PROP.as_ptr() as *const std::ffi::c_char,
+            buf.as_mut_ptr(),
+        )
+    };
+    if n > 0 {
+        let value = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+        if let Ok(v) = value.trim().parse::<f32>() {
+            return v.clamp(0.2, 1.0);
+        }
+    }
+    LOOP_DRIVE_SCALE
+}
+
+/// Drive level for sustained CONT playback. Unlike a tap, the long pulse uses
+/// a reduced level and also scales vmax instead of pinning it to VMAX_HI.
+fn loop_drive_level(amplitude: f32) -> f32 {
+    (drive_level(amplitude) * loop_scale()).clamp(0.0, 1.0)
 }
 
 fn has_haptic_name(dir: &Path) -> bool {
@@ -187,10 +223,11 @@ impl Motor {
 
     pub fn play_loop(&mut self, length_ms: u16, amplitude: f32) -> io::Result<i32> {
         let _ = self.set_motor(false);
-        let t = drive_level(amplitude);
+        let t = loop_drive_level(amplitude);
         let g = (1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16;
         let g = g.min(GAIN_HI);
-        let v = VMAX_HI;
+        let v = (VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16;
+        let v = v.min(VMAX_HI);
 
         self.write_sysfs("activate_mode", "1")?;
         self.write_sysfs("vmax", &v.to_string())?;
@@ -212,11 +249,16 @@ impl Motor {
 
 
     pub fn update(&mut self, _id: i32, amplitude: f32) -> io::Result<()> {
-        let t = drive_level(amplitude);
-        let g = ((1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16).min(GAIN_HI);
         if self.running_kind == 2 {
+            let t = loop_drive_level(amplitude);
+            let g = ((1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16).min(GAIN_HI);
+            let v = ((VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16)
+                .min(VMAX_HI);
+            let _ = self.write_sysfs("vmax", &v.to_string());
             let _ = self.set_gain(g);
         } else if self.running_kind == 1 {
+            let t = drive_level(amplitude);
+            let g = ((1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16).min(GAIN_HI);
             let v = ((VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16)
                 .min(VMAX_HI);
             let _ = self.write_sysfs("vmax", &v.to_string());
