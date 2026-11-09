@@ -51,6 +51,23 @@ const RING_EID_PROP: &[u8] = b"debug.hoshikv.ring_eid\0";
 const RING_EFFECT_SCALE: f32 = 0.55;
 const RING_EFFECT_SCALE_PROP: &[u8] = b"debug.hoshikv.ring_effect_scale\0";
 
+/// The stock thud is only ~85 ms, which feels too short for a ringtone even
+/// though the envelope itself is pleasant. Play the same enveloped pulse a
+/// couple of times back to back: the feel stays soft, but the buzz lasts
+/// noticeably longer. Tune with `debug.hoshikv.ring_repeats` (1..4).
+const RING_REPEATS: u8 = 2;
+const RING_REPEATS_PROP: &[u8] = b"debug.hoshikv.ring_repeats\0";
+
+/// Gap between repeated shaped pulses. Short gaps merge the envelopes into
+/// one longer thud; larger gaps turn it into a soft double beat. Tune with
+/// `debug.hoshikv.ring_gap_ms` (0..400).
+const RING_GAP_MS: u16 = 90;
+const RING_GAP_MS_PROP: &[u8] = b"debug.hoshikv.ring_gap_ms\0";
+
+/// Nominal length of one prebaked pulse, used only to keep the repeat
+/// pattern inside the requested segment.
+const RING_EFFECT_NOMINAL_MS: u32 = 90;
+
 /// Pulses at least this long are treated as ringtone/alarm segments rather
 /// than taps. 50 ms `ring_pulse` bursts and `performHe` pulses stay CONT.
 const RING_PULSE_MIN_MS: u16 = 500;
@@ -135,6 +152,20 @@ fn ring_effect_scale() -> f32 {
         .and_then(|s| s.trim().parse::<f32>().ok())
         .map(|v| v.clamp(0.05, 1.0))
         .unwrap_or(RING_EFFECT_SCALE)
+}
+
+fn ring_repeats() -> u8 {
+    read_prop(RING_REPEATS_PROP)
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|v| v.clamp(1, 4))
+        .unwrap_or(RING_REPEATS)
+}
+
+fn ring_gap_ms() -> u16 {
+    read_prop(RING_GAP_MS_PROP)
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .map(|v| v.min(400))
+        .unwrap_or(RING_GAP_MS)
 }
 
 /// Drive level for sustained CONT playback. Unlike a tap, the long pulse uses
@@ -292,15 +323,35 @@ impl Motor {
         // 750 ms before reporting the vibration as finished.
         if length_ms >= RING_PULSE_MIN_MS && ring_mode() != 0 {
             let eid = ring_effect();
-            let amp = (amplitude.clamp(0.0, 1.0) * ring_effect_scale()).clamp(0.0, 1.0);
+            let scale = ring_effect_scale();
+            let amp = (amplitude.clamp(0.0, 1.0) * scale).clamp(0.0, 1.0);
+            let gap = ring_gap_ms();
+
+            // Keep the whole pattern inside the requested segment so the
+            // framework's next on() never overlaps the tail of this one.
+            let max_repeats = (length_ms as u32
+                / (gap as u32 + RING_EFFECT_NOMINAL_MS))
+                .max(1) as u8;
+            let repeats = ring_repeats().min(max_repeats).max(1);
+
             crate::alogd!(
-                "ring pulse requested={}ms -> shaped eid={} amp={:.2} scale={:.2}",
+                "ring pulse requested={}ms -> shaped eid={} amp={:.2} scale={:.2} repeats={} gap={}ms",
                 length_ms,
                 eid,
                 amp,
-                ring_effect_scale()
+                scale,
+                repeats,
+                gap
             );
-            return self.play_tap(eid, amp, length_ms);
+
+            let mut id = 0;
+            for i in 0..repeats {
+                if i > 0 {
+                    thread::sleep(Duration::from_millis(gap as u64));
+                }
+                id = self.play_tap(eid, amp, length_ms)?;
+            }
+            return Ok(id);
         }
 
         let _ = self.set_motor(false);
