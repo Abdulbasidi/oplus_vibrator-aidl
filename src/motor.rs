@@ -32,10 +32,32 @@ const LOOP_DRIVE_SCALE: f32 = 0.25;
 const LOOP_SCALE_PROP: &[u8] = b"debug.hoshikv.loop_scale\0";
 
 /// A 750 ms continuous CONT pulse is not just strong, it also makes the LRA
-/// buzz loudly for the whole ring cycle. The framework only needs a short
-/// notification pulse per ring, so long CONT requests are truncated to this
-/// many milliseconds. Override at runtime with
-/// `setprop debug.hoshikv.ring_max_ms 150` (clamped to 40..1000).
+/// buzz harshly for the whole ring cycle. By default a long pulse is played
+/// as a shaped prebaked RAM waveform instead of a constant drive; a shaped
+/// pulse has its own envelope and feels like a soft thud rather than a buzz.
+/// `debug.hoshikv.ring_mode`: 1 = shaped effect (default), 0 = truncated CONT.
+const RING_MODE_PROP: &[u8] = b"debug.hoshikv.ring_mode\0";
+const RING_MODE_EFFECT: u8 = 1;
+
+/// Prebaked RAM effect used for a ring pulse. 4 is the stock "thud" (~85 ms),
+/// 1 is a double click, 0 a short click, 3 a tick. Tune with
+/// `debug.hoshikv.ring_eid`.
+const RING_EID: u16 = 4;
+const RING_EID_PROP: &[u8] = b"debug.hoshikv.ring_eid\0";
+
+/// Amplitude multiplier for the shaped ring pulse. The shaped waveform is
+/// already shorter than the requested 750 ms, so it can stay a little
+/// stronger than the muted CONT path while still feeling soft.
+const RING_EFFECT_SCALE: f32 = 0.55;
+const RING_EFFECT_SCALE_PROP: &[u8] = b"debug.hoshikv.ring_effect_scale\0";
+
+/// Pulses at least this long are treated as ringtone/alarm segments rather
+/// than taps. 50 ms `ring_pulse` bursts and `performHe` pulses stay CONT.
+const RING_PULSE_MIN_MS: u16 = 500;
+
+/// Fallback for `ring_mode=0`: truncate a long CONT pulse to this many ms.
+/// Override at runtime with `setprop debug.hoshikv.ring_max_ms 150`
+/// (clamped to 40..1000).
 const RING_MAX_MS: u16 = 150;
 const RING_MAX_MS_PROP: &[u8] = b"debug.hoshikv.ring_max_ms\0";
 
@@ -92,6 +114,27 @@ fn ring_max_ms() -> u16 {
         .and_then(|s| s.trim().parse::<u16>().ok())
         .map(|v| v.clamp(40, 1000))
         .unwrap_or(RING_MAX_MS)
+}
+
+fn ring_mode() -> u8 {
+    read_prop(RING_MODE_PROP)
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .map(|v| if v == 0 { 0 } else { 1 })
+        .unwrap_or(RING_MODE_EFFECT)
+}
+
+fn ring_effect() -> u16 {
+    read_prop(RING_EID_PROP)
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .map(|v| v.min(9))
+        .unwrap_or(RING_EID)
+}
+
+fn ring_effect_scale() -> f32 {
+    read_prop(RING_EFFECT_SCALE_PROP)
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map(|v| v.clamp(0.05, 1.0))
+        .unwrap_or(RING_EFFECT_SCALE)
 }
 
 /// Drive level for sustained CONT playback. Unlike a tap, the long pulse uses
@@ -243,6 +286,23 @@ impl Motor {
 
 
     pub fn play_loop(&mut self, length_ms: u16, amplitude: f32) -> io::Result<i32> {
+        // Ringtone/alarm segments are long. A constant 750 ms drive is what
+        // feels harsh, so play a shaped RAM effect by default. The effect has
+        // its own short envelope; the framework still waits for the requested
+        // 750 ms before reporting the vibration as finished.
+        if length_ms >= RING_PULSE_MIN_MS && ring_mode() != 0 {
+            let eid = ring_effect();
+            let amp = (amplitude.clamp(0.0, 1.0) * ring_effect_scale()).clamp(0.0, 1.0);
+            crate::alogd!(
+                "ring pulse requested={}ms -> shaped eid={} amp={:.2} scale={:.2}",
+                length_ms,
+                eid,
+                amp,
+                ring_effect_scale()
+            );
+            return self.play_tap(eid, amp, length_ms);
+        }
+
         let _ = self.set_motor(false);
         let t = loop_drive_level(amplitude);
         let g = (1.0 + (GAIN_HI as f32 - 1.0) * t).round() as u16;
@@ -250,10 +310,15 @@ impl Motor {
         let v = (VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16;
         let v = v.min(VMAX_HI);
 
-        // A long CONT pulse is a continuous buzz. Truncate it to a short
-        // notification pulse so the ringtone is felt without the loud 750 ms
-        // resonance. Short pulses (taps, 50 ms ring bursts) are unaffected.
-        let play_ms = length_ms.min(ring_max_ms());
+        // In fallback mode a long CONT pulse is a continuous buzz. Truncate
+        // it to a short notification pulse so the ringtone is felt without
+        // the loud 750 ms resonance. Short pulses (taps, 50 ms ring bursts)
+        // are unaffected.
+        let play_ms = if length_ms >= RING_PULSE_MIN_MS {
+            length_ms.min(ring_max_ms())
+        } else {
+            length_ms
+        };
 
         self.write_sysfs("activate_mode", "1")?;
         self.write_sysfs("vmax", &v.to_string())?;
