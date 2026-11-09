@@ -27,9 +27,17 @@ const GAIN_HI: u16 = 0xB4;
 /// Long CONT pulses (incoming-call ringtone, alarms, always-on) accumulate far
 /// more energy than a short tap. Keep them below the tap drive so a 750 ms
 /// ring pulse no longer runs at full vmax/gain. Can be tuned at runtime with
-/// `setprop debug.hoshikv.loop_scale 0.45` (clamped to 0.2..1.0).
-const LOOP_DRIVE_SCALE: f32 = 0.60;
+/// `setprop debug.hoshikv.loop_scale 0.25` (clamped to 0.05..1.0).
+const LOOP_DRIVE_SCALE: f32 = 0.25;
 const LOOP_SCALE_PROP: &[u8] = b"debug.hoshikv.loop_scale\0";
+
+/// A 750 ms continuous CONT pulse is not just strong, it also makes the LRA
+/// buzz loudly for the whole ring cycle. The framework only needs a short
+/// notification pulse per ring, so long CONT requests are truncated to this
+/// many milliseconds. Override at runtime with
+/// `setprop debug.hoshikv.ring_max_ms 150` (clamped to 40..1000).
+const RING_MAX_MS: u16 = 150;
+const RING_MAX_MS_PROP: &[u8] = b"debug.hoshikv.ring_max_ms\0";
 
 
 const CONT_DRV1: u16 = 0x7F;
@@ -50,7 +58,7 @@ fn drive_level(amplitude: f32) -> f32 {
     amplitude.clamp(0.0, 1.0).powf(0.7)
 }
 
-fn loop_scale() -> f32 {
+fn read_prop(name: &[u8]) -> Option<String> {
     extern "C" {
         fn __system_property_get(name: *const std::ffi::c_char, value: *mut std::ffi::c_char) -> i32;
     }
@@ -59,18 +67,31 @@ fn loop_scale() -> f32 {
     // cannot overrun the buffer in __system_property_get.
     let mut buf = [0 as std::ffi::c_char; 92];
     let n = unsafe {
-        __system_property_get(
-            LOOP_SCALE_PROP.as_ptr() as *const std::ffi::c_char,
-            buf.as_mut_ptr(),
-        )
+        __system_property_get(name.as_ptr() as *const std::ffi::c_char, buf.as_mut_ptr())
     };
     if n > 0 {
-        let value = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
-        if let Ok(v) = value.trim().parse::<f32>() {
-            return v.clamp(0.2, 1.0);
-        }
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        None
     }
-    LOOP_DRIVE_SCALE
+}
+
+fn loop_scale() -> f32 {
+    read_prop(LOOP_SCALE_PROP)
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map(|v| v.clamp(0.05, 1.0))
+        .unwrap_or(LOOP_DRIVE_SCALE)
+}
+
+fn ring_max_ms() -> u16 {
+    read_prop(RING_MAX_MS_PROP)
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .map(|v| v.clamp(40, 1000))
+        .unwrap_or(RING_MAX_MS)
 }
 
 /// Drive level for sustained CONT playback. Unlike a tap, the long pulse uses
@@ -229,20 +250,25 @@ impl Motor {
         let v = (VMAX_LO as f32 + (VMAX_HI - VMAX_LO) as f32 * t).round() as u16;
         let v = v.min(VMAX_HI);
 
+        // A long CONT pulse is a continuous buzz. Truncate it to a short
+        // notification pulse so the ringtone is felt without the loud 750 ms
+        // resonance. Short pulses (taps, 50 ms ring bursts) are unaffected.
+        let play_ms = length_ms.min(ring_max_ms());
+
         self.write_sysfs("activate_mode", "1")?;
         self.write_sysfs("vmax", &v.to_string())?;
         self.write_sysfs("gain", &g.to_string())?;
 
 
 
-        self.write_sysfs("duration", &length_ms.to_string())?;
+        self.write_sysfs("duration", &play_ms.to_string())?;
         self.set_motor(true)?;
 
         self.running_kind = 2;
         self.counter = self.counter.wrapping_add(1);
         crate::alogd!(
-            "cont(CONT) vmax=0x{:X} gain=0x{:X} len={}ms (amp={:.2} t={:.2})",
-            v, g, length_ms, amplitude, t
+            "cont(CONT) vmax=0x{:X} gain=0x{:X} len={}ms/{}ms (amp={:.2} t={:.2})",
+            v, g, play_ms, length_ms, amplitude, t
         );
         Ok(self.counter)
     }
